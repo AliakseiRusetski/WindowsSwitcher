@@ -6,5 +6,6 @@ Enter to go to process
 Esc to hide
 
 Launch: 
-dotnet run
-dotnet build --configuration Release
+dotnet restore
+dotnet run # for debug
+dotnet build --configuration Release 
