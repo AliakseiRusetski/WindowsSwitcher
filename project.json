@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0-*",
+  "buildOptions": {
+    "debugType": "portable",
+    "emitEntryPoint": true
+  },
+  "dependencies": {},
+  "frameworks": {
+    "net461": {
+      "imports": "dnxcore50",
+      "frameworkAssemblies": {
+        "System.Windows.Forms": {},
+        "System.Drawing": {},
+        "System.ServiceProcess": {},
+        "System.ComponentModel": {},
+        "System.Configuration.Install": {}
+        
+      }
+    }
+  }
+}
