@@ -8,6 +8,7 @@ using System.Text;
 using System.ServiceProcess;
 using System.ComponentModel;
 using System.Configuration.Install;
+using Microsoft.Win32;
 
 namespace ConsoleApplication
 {
@@ -91,19 +92,27 @@ namespace ConsoleApplication
             {
                 selector.Show();
                 Console.WriteLine("Show window");
-                ShowAppWindow(selector.Handle);
+                ShowAppWindow(selector.Handle, false);
                 selector.Activate();
             }
         }
 
-        internal static void ShowAppWindow(IntPtr hWnd)
+        internal static void ShowAppWindow(IntPtr hWnd, bool useTabMethod = true)
         {
             IntPtr attachTo = GetFocus();
             IntPtr switcher = GetCurrentThreadId();
             AttachThreadInput(switcher, attachTo, true);
-            Console.WriteLine("Attaching: " + switcher.ToString() + " to " + attachTo.ToString());
+            Console.WriteLine("Attaching: " + switcher.ToString() + " to " + attachTo.ToString() + " useTab:" + useTabMethod);
             BringWindowToTop(hWnd);
-            SetForegroundWindow(hWnd);
+            if (useTabMethod)
+            {
+                SwitchToThisWindow(hWnd, true);
+            }
+            else
+            {
+                SetForegroundWindow(hWnd);
+            }
+
             Console.WriteLine("Dettaching: " + switcher.ToString() + " from " + attachTo.ToString());
             AttachThreadInput(switcher, attachTo, false);
         }
@@ -171,10 +180,10 @@ namespace ConsoleApplication
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool IsWindowVisible(IntPtr hWnd);
-        
+
         [DllImport("user32.dll")]
         internal static extern IntPtr SetActiveWindow(IntPtr hWnd);
-        
+
         [DllImport("user32.dll")]
         internal static extern IntPtr BringWindowToTop(IntPtr hWnd);
 
@@ -192,10 +201,10 @@ namespace ConsoleApplication
 
         [DllImport("user32.dll", SetLastError = true)]
         internal static extern IntPtr SetFocus(IntPtr hWnd);
-        
+
         [DllImport("user32.dll")]
         internal static extern IntPtr GetFocus();
-        
+
         [DllImport("kernel32.dll")]
         internal static extern IntPtr GetCurrentThreadId();
 
@@ -249,6 +258,7 @@ namespace ConsoleApplication
     class WindowsSelector : Form
     {
         private TextBox txt;
+        private CheckBox autorunCheckbox;
         private ListBox list;
         private TableLayoutPanel pan;
         private List<ProcessInfo> processInfos;
@@ -268,7 +278,8 @@ namespace ConsoleApplication
         {
             Hide();
             IntPtr con = ConsoleApplication.Program.GetConsoleWindow();
-            if (IntPtr.Zero != con) {
+            if (IntPtr.Zero != con)
+            {
                 ConsoleApplication.Program.ShowWindow(con, 0);
             }
         }
@@ -296,35 +307,54 @@ namespace ConsoleApplication
             pan = InitPan();
             txt = new TextBox();
             list = new ListBox();
+            autorunCheckbox = new CheckBox();
             int innerWidth = (int)(Size.Width * 0.97);
             int innerHeight = (int)(Size.Height * 0.97);
             txt.Width = innerWidth;
-            txt.KeyPress += Selector_KeyPress;
-            list.KeyPress += Selector_KeyPress;
+            txt.KeyDown += Selector_KeyDown;
+            list.KeyDown += Selector_KeyDown;
             list.Width = innerWidth;
-            list.Height = innerHeight;
+            list.Height = (int)(innerHeight * 0.90);
+            autorunCheckbox.Text = "Autorun";
+            autorunCheckbox.CheckedChanged += Selector_OnAutorunCheckChanged;
             Controls.Add(pan);
             pan.Controls.Add(txt);
             pan.Controls.Add(list);
+            pan.Controls.Add(autorunCheckbox);
             txt.TextChanged += txt_TextChanged;
         }
-        private void Selector_KeyPress(object sender, KeyPressEventArgs e)
+
+        private void Selector_OnAutorunCheckChanged(object sender, EventArgs e)
         {
-            if (e.KeyChar == 13) // enter
+            RegistryKey rk = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+
+            if (autorunCheckbox.Checked)
+                rk.SetValue("WindowsSwitcher", Application.ExecutablePath.ToString());
+            else
+                rk.DeleteValue("WindowsSwitcher", false);
+        }
+
+        private void Selector_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
             {
                 if (processInfos.Count > 0 && list.SelectedIndex >= 0 && list.SelectedIndex < processInfos.Count)
                 {
                     IntPtr hWnd = processInfos[list.SelectedIndex].hwnd;
-                    Console.WriteLine("showind: " + hWnd.ToString());
+                    Console.WriteLine("showing: " + hWnd.ToString());
                     ConsoleApplication.Program.ShowAppWindow(hWnd);
                 }
+                e.Handled = true;
+                e.SuppressKeyPress = true;
                 // Close();
                 Hide();
             }
-            if (e.KeyChar == 27) //esc
+            if (e.KeyCode == Keys.Escape)
             {
                 // Close();
-                Hide();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                Hide();                
             }
         }
 
@@ -369,7 +399,7 @@ namespace ConsoleApplication
                 ConsoleApplication.Program.GetWindowThreadProcessId(window, out pid);
                 if (!ConsoleApplication.Program.IsWindowVisible(window)) continue;
                 string title = ConsoleApplication.Program.GetWindowText(window);
-                if (processInfos.Find(ps => ps.pid == (int)pid) != null) continue;
+                if (string.IsNullOrEmpty(title)) continue;
                 string name = Process.GetProcessById((int)pid).ProcessName;
                 processInfos.Add(new ProcessInfo((int)pid, window, name, title));
             }
