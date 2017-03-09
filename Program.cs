@@ -9,6 +9,7 @@ using System.ServiceProcess;
 using System.ComponentModel;
 using System.Configuration.Install;
 using Microsoft.Win32;
+using System.Linq;
 
 namespace ConsoleApplication
 {
@@ -48,10 +49,11 @@ namespace ConsoleApplication
 
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
-        private static LowLevelKeyboardProc _proc = HookCallback;
-        private static IntPtr _hookID = IntPtr.Zero;
+        private static LowLevelKeyboardProc keyboardProc = HookCallback;
+        private static IntPtr keyboardHook = IntPtr.Zero;
         private static int[] lastPressedKeys = new int[] { 0, 0 };
-        private static int[] TEMPLATE = new int[] { 162, 91 }; // ctrl, win
+        private static DateTime? lastPressTime;
+        private static int[] VK_TEMPLATE = new int[] { 162, 91 }; // ctrl, win
         private static Program main;
 
         public static void Main(string[] args)
@@ -60,6 +62,7 @@ namespace ConsoleApplication
             //ShowForm();
 
             main = new Program();
+            Application.EnableVisualStyles();
             ShowForm();
             Application.Run(selector);
             main.OnStop();
@@ -71,12 +74,12 @@ namespace ConsoleApplication
             this.ServiceName = "SwitcherHook";
             this.EventLog.Log = "Launched";
             this.CanStop = true;
-            _hookID = SetHook(_proc);
+            keyboardHook = SetHook(keyboardProc);
         }
 
         protected override void OnStop()
         {
-            UnhookWindowsHookEx(_hookID);
+            UnhookWindowsHookEx(keyboardHook);
             // base.OnStop();
         }
 
@@ -134,29 +137,31 @@ namespace ConsoleApplication
             if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
             {
                 int vkCode = Marshal.ReadInt32(lParam);
-                for (int i = 0; i < lastPressedKeys.Length - 1; i++)
-                {
-                    lastPressedKeys[i] = lastPressedKeys[i + 1];
-                }
-                lastPressedKeys[lastPressedKeys.Length - 1] = vkCode;
-
-                bool same = true;
-                for (int i = 0; i < lastPressedKeys.Length; i++)
-                {
-                    // Console.WriteLine(lastPressedKeys[i]);
-                    if (lastPressedKeys[i] != TEMPLATE[i])
-                    {
-                        same = false;
-                    }
-                }
-                // Console.WriteLine("----");
-                if (same)
+                PutKey(vkCode);
+                if (IsKeysMatch())
                 {
                     ShowForm();
                 }
             }
 
-            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+            return CallNextHookEx(keyboardHook, nCode, wParam, lParam);
+        }
+
+        private static bool IsKeysMatch()
+        {
+            return VK_TEMPLATE.SequenceEqual(lastPressedKeys);
+        }
+
+        private static void PutKey(int vkCode)
+        {
+            if (lastPressTime != null && DateTime.Now.AddSeconds(-2) > lastPressTime)
+            {
+                lastPressTime = null;
+                Array.Clear(lastPressedKeys, 0, lastPressedKeys.Length);
+            }
+            Array.Copy(lastPressedKeys, 1, lastPressedKeys, 0, lastPressedKeys.Length - 1);
+            lastPressedKeys[lastPressedKeys.Length - 1] = vkCode;
+            lastPressTime = DateTime.Now;
         }
 
         [DllImport("kernel32.dll")]
@@ -257,6 +262,7 @@ namespace ConsoleApplication
 
     class WindowsSelector : Form
     {
+        private const string AUTORUN_KEY = "WindowsSwitcher";
         private TextBox txt;
         private CheckBox autorunCheckbox;
         private ListBox list;
@@ -269,6 +275,7 @@ namespace ConsoleApplication
             Shown += WindowsSelector_ShownFirst;
             Shown += WindowsSelector_Shown;
             VisibleChanged += WindowsSelector_Shown;
+            FormBorderStyle = FormBorderStyle.FixedSingle;
             Size = new Size(650, 800);
             TopMost = true;
             InitComponents();
@@ -306,6 +313,8 @@ namespace ConsoleApplication
         {
             pan = InitPan();
             txt = new TextBox();
+            txt.Multiline = false;
+            txt.ShortcutsEnabled = true;
             list = new ListBox();
             autorunCheckbox = new CheckBox();
             int innerWidth = (int)(Size.Width * 0.97);
@@ -316,6 +325,7 @@ namespace ConsoleApplication
             list.Width = innerWidth;
             list.Height = (int)(innerHeight * 0.90);
             autorunCheckbox.Text = "Autorun";
+            autorunCheckbox.Checked = GetAutorunRK().GetValue(AUTORUN_KEY) != null;
             autorunCheckbox.CheckedChanged += Selector_OnAutorunCheckChanged;
             Controls.Add(pan);
             pan.Controls.Add(txt);
@@ -324,14 +334,19 @@ namespace ConsoleApplication
             txt.TextChanged += txt_TextChanged;
         }
 
-        private void Selector_OnAutorunCheckChanged(object sender, EventArgs e)
+        private RegistryKey GetAutorunRK()
         {
             RegistryKey rk = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+            return rk;
+        }
 
+        private void Selector_OnAutorunCheckChanged(object sender, EventArgs e)
+        {
+            var rk = GetAutorunRK();
             if (autorunCheckbox.Checked)
-                rk.SetValue("WindowsSwitcher", Application.ExecutablePath.ToString());
+                rk.SetValue(AUTORUN_KEY, Application.ExecutablePath.ToString());
             else
-                rk.DeleteValue("WindowsSwitcher", false);
+                rk.DeleteValue(AUTORUN_KEY, false);
         }
 
         private void Selector_KeyDown(object sender, KeyEventArgs e)
@@ -354,7 +369,7 @@ namespace ConsoleApplication
                 // Close();
                 e.Handled = true;
                 e.SuppressKeyPress = true;
-                Hide();                
+                Hide();
             }
         }
 
@@ -425,21 +440,25 @@ namespace ConsoleApplication
 
         override public string ToString()
         {
-            return "ProcID: " + pid + "\thWnd: " + hwnd.ToInt64() + "\tN: " + name + "\tT: " + title;
+            return String.Format("pid:{0,-5}  hwnd:{1,-14} {2}>>>>{3}", pid, hwnd.ToInt64(), name, title);
         }
 
         internal void Recalc(string txtValue)
         {
             string lower = (txtValue.Clone() as string).ToLower();
-            weight = int.MaxValue;
             string nameLower = name.ToLower();
             string titleLower = title.ToLower();
+            weight = int.MaxValue;
             if (nameLower.Contains(txtValue) || titleLower.Contains(txtValue))
             {
                 weight = 1;
             }
-            int distances = Math.Min(LevenshteinDistance.Compute(lower, nameLower), Math.Min(LevenshteinDistance.Compute(lower, titleLower), LevenshteinDistance.Compute(lower, pid.ToString())));
-            weight = Math.Min(distances, weight);
+            weight = new int[]{
+                weight,
+                LevenshteinDistance.Compute(lower, nameLower),
+                LevenshteinDistance.Compute(lower, titleLower),
+                LevenshteinDistance.Compute(lower, pid.ToString())
+            }.Min();
         }
 
         public int CompareTo(object obj)

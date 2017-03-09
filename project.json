@@ -14,8 +14,8 @@
         "System.Drawing": {},
         "System.ServiceProcess": {},
         "System.ComponentModel": {},
-        "System.Configuration.Install": {}
-        
+        "System.Configuration.Install": {},
+        "System.Linq": {}
       }
     }
   }
